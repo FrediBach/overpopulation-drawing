@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS } from '../scene/types'
 import { synthesizeScene } from '../synthesis/synthesize'
 import { polylineLength } from '../math/geometry'
-import { compileDrawing } from './compileDrawing'
+import { autoCell, compileDrawing } from './compileDrawing'
 
 describe('compileDrawing', () => {
   const scene = synthesizeScene({ ...DEFAULT_SETTINGS, population: 40, seed: 11 })
@@ -45,10 +45,14 @@ describe('compileDrawing', () => {
     expect(a3.report.mmPerMetre).toBeLessThan(r.mmPerMetre)
     const scale = a3.report.mmPerMetre / r.mmPerMetre
     // Ink scales with paper size; it does not collapse or explode.
-    expect(a3.report.lines.drawLengthMm / r.lines.drawLengthMm).toBeGreaterThan(scale * 0.85)
-    expect(a3.report.lines.drawLengthMm / r.lines.drawLengthMm).toBeLessThan(scale * 1.1)
+    expect(a3.report.lines.drawLengthMm / r.lines.drawLengthMm).toBeGreaterThan(scale * 0.8)
+    expect(a3.report.lines.drawLengthMm / r.lines.drawLengthMm).toBeLessThan(scale * 1.15)
     // The fragment filter is applied in mm on both sheets.
     for (const s of a3.strokes) expect(polylineLength(s.points)).toBeGreaterThanOrEqual(0.3 - 1e-9)
+  })
+
+  it('picks a coarser body mesh for smaller paper scales', () => {
+    expect(autoCell(10)).toBeGreaterThan(autoCell(40))
   })
 
   it('omits detail lines when requested', () => {

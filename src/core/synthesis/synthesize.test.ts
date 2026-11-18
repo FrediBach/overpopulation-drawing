@@ -1,5 +1,4 @@
 import { DEFAULT_SETTINGS } from '../scene/types'
-import { POSE_FAMILY_BY_ID } from '../poses/poseLibrary'
 import { synthesizeScene } from './synthesize'
 import { isInWater } from './composition'
 
@@ -27,6 +26,14 @@ describe('synthesizeScene', () => {
     for (const p of scene.people) expect(isInWater(scene.beach, p.x, p.z)).toBe(false)
   })
 
+  it('stores a pose description and a body for every person', () => {
+    for (const p of scene.people) {
+      expect(p.pose?.posture).toBe(p.posture)
+      expect(scene.bodies[p.bodyIndex]).toBeDefined()
+    }
+    expect(new Set(scene.people.map((p) => p.bodyIndex)).size).toBeGreaterThan(4)
+  })
+
   it('creates touching relationships and motif groups at high crowding', () => {
     expect(scene.relationships.some((r) => r.kind === 'touch')).toBe(true)
     expect(scene.stats.motifInstances).toBeGreaterThan(0)
@@ -36,13 +43,13 @@ describe('synthesizeScene', () => {
     const only = synthesizeScene({
       ...settings,
       population: 30,
-      postureMix: { lyingBack: 0, lyingFront: 0, sitting: 1, reclining: 0, standing: 0 },
+      postureMix: { lyingBack: 0, lyingFront: 0, lyingSide: 0, sitting: 1, reclining: 0, kneeling: 0, standing: 0 },
     })
-    for (const p of only.people) expect(POSE_FAMILY_BY_ID[p.family].posture).toBe('sitting')
+    for (const p of only.people) expect(p.posture).toBe('sitting')
   })
 
   it('reports a shortfall honestly instead of forcing bodies in', () => {
-    const tiny = synthesizeScene({ ...settings, population: 400, crowding: 1, postureMix: { lyingBack: 1, lyingFront: 0, sitting: 0, reclining: 0, standing: 0 } })
+    const tiny = synthesizeScene({ ...settings, population: 150, crowding: 1, postureMix: { lyingBack: 1, lyingFront: 0, lyingSide: 0, sitting: 0, reclining: 0, kneeling: 0, standing: 0 } })
     expect(tiny.validation.failures).toEqual([])
     expect(tiny.stats.placed).toBeLessThanOrEqual(tiny.stats.requested)
     expect(tiny.people).toHaveLength(tiny.stats.placed)

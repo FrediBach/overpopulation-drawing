@@ -7,6 +7,7 @@ import { initialStudioState, studioReducer, type StudioState } from './studioSta
 export interface StudioActions {
   dispatch: React.Dispatch<Parameters<typeof studioReducer>[1]>
   generate(): void
+  generateLab(): void
   computeLines(): void
   cancel(): void
   exportSvg(): void
@@ -51,7 +52,17 @@ export function useStudio(createClient: () => PipelineClient = () => new Pipelin
         dispatch({ type: 'jobStarted', kind: 'scene', label: 'Placing people' })
         client
           .compileScene(stateRef.current.settings, onProgress)
-          .then((scene) => dispatch({ type: 'sceneReady', scene }))
+          .then(({ scene, preview }) => dispatch({ type: 'sceneReady', scene, preview }))
+          .catch(handleError)
+      },
+      generateLab() {
+        const client = clientRef.current
+        if (!client) return
+        client.cancel()
+        dispatch({ type: 'jobStarted', kind: 'scene', label: 'Generating poses' })
+        client
+          .compileLab(stateRef.current.lab, onProgress)
+          .then(({ scene, preview }) => dispatch({ type: 'sceneReady', scene, preview, fromLab: true }))
           .catch(handleError)
       },
       computeLines() {
@@ -87,9 +98,13 @@ export function useStudio(createClient: () => PipelineClient = () => new Pipelin
         downloadText(`beach-${scene.settings.population}-s${scene.settings.seed}-${snapshotHash(json)}.scene.json`, json, 'application/json')
       },
       loadScene(file: File) {
+        const client = clientRef.current
+        if (!client) return
+        dispatch({ type: 'jobStarted', kind: 'scene', label: 'Opening scene' })
         file
           .text()
-          .then((text) => dispatch({ type: 'sceneReady', scene: parseScene(text) }))
+          .then((text) => client.buildPreview(parseScene(text), onProgress))
+          .then(({ scene, preview }) => dispatch({ type: 'sceneReady', scene, preview }))
           .catch(handleError)
       },
     }),

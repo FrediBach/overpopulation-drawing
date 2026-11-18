@@ -2,6 +2,8 @@
 
 - Read README.md for architecture. The design source is overpopulation-beach-plan.md; cite its sections when extending.
 - `src/core` must stay framework-free (no React or DOM). It runs in Node tests, the worker and `scripts/render.ts`.
+- Bodies: `core/body` (implicit primitives → surface nets → DQ skinning). Poses: `core/poses/generate.ts` (archetypes + limb modes + IK). Use `npm run render -- --lab all` to eyeball changes to either.
+- Skeleton bone order must equal `BONE_NAMES` (skin weights and matrices index by it).
 - Units: scene metres (Y up, person +Z forward, +X left); paper millimetres (SVG y down); depth in metres along the view direction.
 - Non-penetration, joint limits and grounding are acceptance constraints. Never trade them for population. Report shortfalls instead.
 - Saved snapshots hold final numerical joints. Keep `SCENE_SCHEMA_VERSION` in sync when the schema changes, and avoid `-0` in saved numbers.

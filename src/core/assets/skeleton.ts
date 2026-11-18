@@ -81,8 +81,8 @@ function leftAndRight(spec: BoneSpec): BoneSpec[] {
   return [spec, right]
 }
 
-/** Rest skeleton for the reference body (about 1.76 m tall). */
-export const REFERENCE_SKELETON: readonly BoneSpec[] = [
+/** Rest skeleton for the reference body (about 1.76 m tall), in BONE_NAMES order (parents first). */
+export const REFERENCE_SKELETON: readonly BoneSpec[] = ([
   {
     name: 'pelvis', parent: null, offset: [0, 0, 0], region: 'torso',
     segment: { a: [0, -0.01, 0], b: [0, 0.1, 0], rx: 0.155, rz: 0.105, rcap: 0.09 },
@@ -127,7 +127,7 @@ export const REFERENCE_SKELETON: readonly BoneSpec[] = [
     name: 'foot.L', parent: 'shin.L', offset: [0, -0.4, 0], region: 'leg',
     segment: { a: [0, -0.02, -0.02], b: [0, -0.045, 0.16], rx: 0.035, rz: 0.03, rcap: 0.035 },
   }),
-]
+] as BoneSpec[]).sort((a, b) => BONE_NAMES.indexOf(a.name) - BONE_NAMES.indexOf(b.name))
 
 export const BONE_INDEX: Record<BoneName, number> = Object.fromEntries(
   REFERENCE_SKELETON.map((b, i) => [b.name, i]),

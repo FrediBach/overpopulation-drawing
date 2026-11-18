@@ -1,16 +1,17 @@
 import { useEffect, useRef } from 'react'
-import type { SceneSnapshot } from '@/core'
+import type { PreviewBatch, SceneSnapshot } from '@/core'
 import { CrowdPreview, type PreviewOverlay } from '@/preview/CrowdPreview'
 
 interface ShadedViewportProps {
   scene: SceneSnapshot | null
+  preview: PreviewBatch | null
   overlay: PreviewOverlay
   onPick: (id: number | null) => void
   /** Increment to snap the view back to the print camera. */
   resetToken: number
 }
 
-export function ShadedViewport({ scene, overlay, onPick, resetToken }: ShadedViewportProps) {
+export function ShadedViewport({ scene, preview, overlay, onPick, resetToken }: ShadedViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<CrowdPreview | null>(null)
   const onPickRef = useRef(onPick)
@@ -30,8 +31,8 @@ export function ShadedViewport({ scene, overlay, onPick, resetToken }: ShadedVie
   }, [])
 
   useEffect(() => {
-    previewRef.current?.setScene(scene)
-  }, [scene])
+    previewRef.current?.setScene(scene, preview)
+  }, [scene, preview])
 
   useEffect(() => {
     previewRef.current?.setOverlay(overlay)

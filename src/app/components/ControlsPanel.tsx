@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Dices, FolderOpen, PenLine, Save, Sparkles, Download } from 'lucide-react'
-import { PAPER_PROFILES, POSTURES, type Posture, type SceneSettings } from '@/core'
+import { ARCHETYPES, PAPER_PROFILES, POSTURES, type SceneSettings } from '@/core'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,14 +8,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { SliderField } from './SliderField'
-
-const POSTURE_LABELS: Record<Posture, string> = {
-  lyingBack: 'Lying on back',
-  lyingFront: 'Lying on stomach',
-  sitting: 'Sitting',
-  reclining: 'Reclining',
-  standing: 'Standing',
-}
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
@@ -53,6 +45,13 @@ export function ControlsPanel(props: ControlsPanelProps) {
         <SliderField label="Crowding" value={settings.crowding} min={0} max={1} step={0.01} format={pct} onChange={(crowding) => onSettings({ crowding })} />
         <SliderField label="Motif share" value={settings.motifShare} min={0} max={1} step={0.01} format={pct} onChange={(motifShare) => onSettings({ motifShare })} />
         <SliderField label="Children" value={settings.childShare} min={0} max={0.4} step={0.01} format={pct} onChange={(childShare) => onSettings({ childShare })} />
+        <SliderField
+          label="Body variety"
+          value={settings.bodyVariety}
+          min={2}
+          max={48}
+          onChange={(bodyVariety) => onSettings({ bodyVariety })}
+        />
         <div className="grid gap-2">
           <Label htmlFor="seed" className="text-xs text-muted-foreground">
             Seed
@@ -83,7 +82,7 @@ export function ControlsPanel(props: ControlsPanelProps) {
         {POSTURES.map((p) => (
           <SliderField
             key={p}
-            label={POSTURE_LABELS[p]}
+            label={ARCHETYPES[p].label}
             value={settings.postureMix[p]}
             min={0}
             max={5}

@@ -11,9 +11,9 @@ const SAND_Y = 0.003
  * few broken wave lines. They are candidates like body curves and pass
  * through the same hidden-line removal.
  */
-export function environmentSegments(scene: SceneSnapshot, projector: Projector, firstVertexId: number): CandidateSegment[] {
+export function environmentSegments(scene: SceneSnapshot, projector: Projector, firstKey: number): CandidateSegment[] {
   const out: CandidateSegment[] = []
-  let vid = firstVertexId
+  let vid = firstKey
   const tmp = [0, 0, 0]
 
   const polyline = (pts: [number, number, number][], closed: boolean) => {
@@ -28,8 +28,11 @@ export function environmentSegments(scene: SceneSnapshot, projector: Projector, 
       out.push({
         u0: proj[i][0], v0: proj[i][1], d0: proj[i][2],
         u1: proj[j][0], v1: proj[j][1], d1: proj[j][2],
-        ia: ids[i],
-        ib: ids[j],
+        s0: -1,
+        s1: -1,
+        s2: -1,
+        k0: ids[i],
+        k1: ids[j],
         owner: -1,
         cls: 'environment',
         region: 'environment',

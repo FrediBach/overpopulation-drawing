@@ -14,10 +14,10 @@ const LEFT_AND_CENTRE: Partial<Record<BoneName, AxisLimits>> = {
   chest: [[-30, 40], [-30, 30], [-25, 25]],
   neck: [[-45, 50], [-50, 50], [-30, 30]],
   head: [[-45, 45], [-80, 80], [-30, 30]],
-  'upperArm.L': [[-175, 80], [-90, 90], [-30, 120]],
+  'upperArm.L': [[-180, 90], [-95, 95], [-40, 130]],
   'foreArm.L': [[-150, 0], [-80, 80], [-5, 5]],
   'hand.L': [[-70, 70], [-30, 30], [-30, 30]],
-  'thigh.L': [[-130, 30], [-45, 45], [-30, 70]],
+  'thigh.L': [[-140, 35], [-60, 60], [-35, 80]],
   'shin.L': [[0, 150], [-10, 10], [-5, 5]],
   'foot.L': [[-50, 60], [-20, 20], [-20, 20]],
 }
@@ -49,11 +49,14 @@ export interface JointLimitViolation {
   limit: [number, number]
 }
 
+/** Shoulders are validated by a direction cone in the pose generator instead of Euler ranges. */
+const CONE_CHECKED = new Set<BoneName>(['upperArm.L', 'upperArm.R'])
+
 export function findJointLimitViolations(joints: JointRotations, toleranceDeg = 0.01): JointLimitViolation[] {
   const out: JointLimitViolation[] = []
   for (const name of BONE_NAMES) {
     const rot = joints[name]
-    if (!rot) continue
+    if (!rot || CONE_CHECKED.has(name)) continue
     const l = JOINT_LIMITS[name]
     for (let axis = 0; axis < 3; axis++) {
       if (rot[axis] < l[axis][0] - toleranceDeg || rot[axis] > l[axis][1] + toleranceDeg) {

@@ -1,5 +1,5 @@
-import type { DrawingOptions, DrawingResult, SceneSettings, SceneSnapshot } from '@/core'
-import type { WorkerRequest, WorkerResponse } from './protocol'
+import type { DrawingOptions, DrawingResult, LabSettings, SceneSettings, SceneSnapshot } from '@/core'
+import type { SceneWithPreview, WorkerRequest, WorkerResponse } from './protocol'
 
 export type ProgressListener = (fraction: number, label: string) => void
 
@@ -55,7 +55,7 @@ export class PipelineClient {
         job.onProgress?.(msg.fraction, msg.label)
         return
       case 'sceneResult':
-        job.resolve(msg.scene)
+        job.resolve(msg.result)
         break
       case 'drawingResult':
         job.resolve(msg.drawing)
@@ -75,8 +75,17 @@ export class PipelineClient {
     })
   }
 
-  compileScene(settings: SceneSettings, onProgress?: ProgressListener): Promise<SceneSnapshot> {
+  compileScene(settings: SceneSettings, onProgress?: ProgressListener): Promise<SceneWithPreview> {
     return this.run({ type: 'compileScene', settings }, onProgress)
+  }
+
+  compileLab(lab: LabSettings, onProgress?: ProgressListener): Promise<SceneWithPreview> {
+    return this.run({ type: 'compileLab', lab }, onProgress)
+  }
+
+  /** Preview geometry for a scene loaded from disk. */
+  buildPreview(scene: SceneSnapshot, onProgress?: ProgressListener): Promise<SceneWithPreview> {
+    return this.run({ type: 'buildPreview', scene }, onProgress)
   }
 
   compileDrawing(scene: SceneSnapshot, options: Partial<DrawingOptions>, onProgress?: ProgressListener): Promise<DrawingResult> {

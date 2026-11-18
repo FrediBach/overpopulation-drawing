@@ -1,4 +1,4 @@
-import { POSE_FAMILIES } from '../poses/poseLibrary'
+import { ARCHETYPES } from '../poses/archetypes'
 import { POSTURES, type Posture } from '../poses/types'
 import { createRng } from '../math/rng'
 import { clamp, DEG, lerp } from '../math/geometry'
@@ -12,8 +12,7 @@ function averageFootprint(mix: Record<Posture, number>): number {
   let total = 0
   let w = 0
   for (const posture of POSTURES) {
-    const families = POSE_FAMILIES.filter((f) => f.posture === posture)
-    const fp = families.reduce((s, f) => s + f.footprint, 0) / Math.max(1, families.length)
+    const fp = ARCHETYPES[posture].footprint
     const weight = Math.max(0, mix[posture])
     total += fp * weight
     w += weight

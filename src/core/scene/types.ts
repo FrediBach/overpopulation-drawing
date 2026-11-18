@@ -1,9 +1,10 @@
-import type { JointRotations, Posture } from '../poses/types'
-import type { Outfit } from '../assets/bodyMesh'
+import type { EulerDeg, JointRotations, PoseParams, Posture } from '../poses/types'
+import type { Outfit } from '../body/features'
+import type { BodyParams } from '../body/params'
 import type { BoneName } from '../assets/skeleton'
 import type { PaperProfile } from './paper'
 
-export const SCENE_SCHEMA_VERSION = 1
+export const SCENE_SCHEMA_VERSION = 2
 
 export interface SceneSettings {
   /** Requested population. */
@@ -16,6 +17,8 @@ export interface SceneSettings {
   motifShare: number
   /** Fraction of people who are children. */
   childShare: number
+  /** Number of distinct body shapes in the scene's body bank. */
+  bodyVariety: number
   paperId: string
   /** Camera elevation above the horizon, degrees. */
   elevationDeg: number
@@ -25,9 +28,10 @@ export const DEFAULT_SETTINGS: SceneSettings = {
   population: 120,
   seed: 7,
   crowding: 0.75,
-  postureMix: { lyingBack: 3, lyingFront: 2, sitting: 3, reclining: 2, standing: 1 },
+  postureMix: { lyingBack: 3, lyingFront: 2, lyingSide: 1.5, sitting: 3, reclining: 1.5, kneeling: 0.5, standing: 1 },
   motifShare: 0.5,
   childShare: 0.08,
+  bodyVariety: 16,
   paperId: 'A2',
   elevationDeg: 52,
 }
@@ -71,19 +75,22 @@ export interface BeachLayout {
 
 export interface PersonRecord {
   id: number
-  bodyVariant: string
-  family: string
-  variant: string
-  outfit: Outfit
-  /** Final numerical joint rotations (degrees), saved rather than regenerated. */
+  /** Index into SceneSnapshot.bodies. */
+  bodyIndex: number
+  posture: Posture
+  /** Latent pose description (null for poses made by blending). */
+  pose: PoseParams | null
+  /** Final numerical root orientation and joint rotations (degrees), saved rather than regenerated. */
+  root: EulerDeg
   joints: JointRotations
+  outfit: Outfit
   x: number
   z: number
   /** Radians about +Y. */
   yaw: number
   motifId: string | null
   groupId: number | null
-  /** True when the fitter switched limb variant to make room for neighbours. */
+  /** True when the fitter changed the pose to make room for neighbours. */
   accommodated: boolean
 }
 
@@ -115,7 +122,7 @@ export interface UnresolvedRegion {
   reason: string
 }
 
-export type ValidationFailureKind = 'penetration' | 'ground' | 'joint-limit' | 'water'
+export type ValidationFailureKind = 'penetration' | 'ground' | 'joint-limit' | 'water' | 'pose'
 
 export interface ValidationFailure {
   personId: number
@@ -151,6 +158,8 @@ export interface SceneSnapshot {
   paper: PaperProfile
   camera: CameraSpec
   beach: BeachLayout
+  /** Body bank: every distinct body shape used by the scene. */
+  bodies: BodyParams[]
   people: PersonRecord[]
   towels: Towel[]
   relationships: Relationship[]

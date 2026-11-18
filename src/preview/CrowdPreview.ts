@@ -21,16 +21,7 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import {
-  bodyMeshIndices,
-  buildBodyMesh,
-  cameraBasis,
-  personCapsules,
-  POSE_FAMILY_BY_ID,
-  PREVIEW_RESOLUTION,
-  shorelineZ,
-  type SceneSnapshot,
-} from '@/core'
+import { cameraBasis, shorelineZ, type PreviewBatch, type SceneSnapshot } from '@/core'
 import { ALERT, NEUTRAL, NOTICE, personColor, POSTURE_COLORS, SELECTED, type ColorMode } from './colors'
 
 export interface PreviewOverlay {
@@ -39,6 +30,19 @@ export interface PreviewOverlay {
   /** Visible ink per person (from the drawing compiler), for the visibility mode. */
   visibleMm?: number[] | null
   contributingMm?: number
+}
+
+/** Binary search the person whose face range contains `face`. */
+export function personForFace(starts: Uint32Array, face: number): number {
+  let lo = 0
+  let hi = starts.length - 2
+  if (hi < 0 || face >= starts[starts.length - 1]) return -1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (starts[mid] <= face) lo = mid
+    else hi = mid - 1
+  }
+  return lo
 }
 
 /**
@@ -55,8 +59,7 @@ export class CrowdPreview {
   private environment = new Group()
   private frame: LineLoop | null = null
   private snapshot: SceneSnapshot | null = null
-  private vertsPerPerson = 0
-  private facesPerPerson = 0
+  private batch: PreviewBatch | null = null
   private overlay: PreviewOverlay = { colorMode: 'person', selectedId: null }
   private resizeObserver: ResizeObserver
   private raf = 0
@@ -141,29 +144,20 @@ export class CrowdPreview {
     this.invalidate()
   }
 
-  setScene(snapshot: SceneSnapshot | null) {
+  /** Show a scene using geometry batched by the worker (positions, normals, per-person ranges). */
+  setScene(snapshot: SceneSnapshot | null, batch: PreviewBatch | null) {
     this.snapshot = snapshot
+    this.batch = batch
     this.disposeCrowd()
-    if (!snapshot) {
+    if (!snapshot || !batch) {
       this.invalidate()
       return
     }
-    // Batch every person into one indexed geometry.
-    const meshes = snapshot.people.map((p) => buildBodyMesh(personCapsules(p), PREVIEW_RESOLUTION))
-    const first = meshes[0]
-    this.vertsPerPerson = first ? first.positions.length / 3 : 0
-    this.facesPerPerson = first ? (first.template.indices.length * first.capsuleCount) / 3 : 0
-    const positions = new Float32Array(meshes.length * this.vertsPerPerson * 3)
-    const indices = new Uint32Array(meshes.length * this.facesPerPerson * 3)
-    meshes.forEach((m, i) => {
-      positions.set(m.positions, i * this.vertsPerPerson * 3)
-      indices.set(bodyMeshIndices(m, i * this.vertsPerPerson), i * this.facesPerPerson * 3)
-    })
     const geometry = new BufferGeometry()
-    geometry.setAttribute('position', new BufferAttribute(positions, 3))
-    geometry.setAttribute('color', new BufferAttribute(new Float32Array(positions.length), 3))
-    geometry.setIndex(new BufferAttribute(indices, 1))
-    geometry.computeVertexNormals()
+    geometry.setAttribute('position', new BufferAttribute(batch.positions, 3))
+    geometry.setAttribute('normal', new BufferAttribute(batch.normals, 3))
+    geometry.setAttribute('color', new BufferAttribute(new Float32Array(batch.positions.length), 3))
+    geometry.setIndex(new BufferAttribute(batch.indices, 1))
     geometry.computeBoundingSphere()
     this.crowd = new Mesh(geometry, new MeshLambertMaterial({ vertexColors: true }))
     this.scene.add(this.crowd)
@@ -178,7 +172,8 @@ export class CrowdPreview {
   }
 
   private applyColors() {
-    if (!this.crowd || !this.snapshot) return
+    if (!this.crowd || !this.snapshot || !this.batch) return
+    const starts = this.batch.personVertexStart
     const attr = this.crowd.geometry.getAttribute('color') as BufferAttribute
     const colors = attr.array as Float32Array
     const invalid = new Set(this.snapshot.validation.invalidPeople)
@@ -186,15 +181,14 @@ export class CrowdPreview {
     this.snapshot.people.forEach((p, i) => {
       let c: [number, number, number]
       if (p.id === selectedId) c = SELECTED
-      else if (colorMode === 'posture') c = POSTURE_COLORS[POSE_FAMILY_BY_ID[p.family].posture]
+      else if (colorMode === 'posture') c = POSTURE_COLORS[p.posture]
       else if (colorMode === 'validity') c = invalid.has(p.id) ? ALERT : p.accommodated ? NOTICE : NEUTRAL
       else if (colorMode === 'visibility') c = !visibleMm ? NEUTRAL : visibleMm[i] < contributingMm ? ALERT : NEUTRAL
       else c = personColor(p.id)
-      const start = i * this.vertsPerPerson * 3
-      for (let v = 0; v < this.vertsPerPerson; v++) {
-        colors[start + v * 3] = c[0]
-        colors[start + v * 3 + 1] = c[1]
-        colors[start + v * 3 + 2] = c[2]
+      for (let v = starts[i]; v < starts[i + 1]; v++) {
+        colors[v * 3] = c[0]
+        colors[v * 3 + 1] = c[1]
+        colors[v * 3 + 2] = c[2]
       }
     })
     attr.needsUpdate = true
@@ -248,13 +242,13 @@ export class CrowdPreview {
 
   private handlePointerUp = (e: PointerEvent) => {
     if (this.pointerDown.distanceTo(new Vector2(e.clientX, e.clientY)) > 4) return
-    if (!this.crowd || !this.snapshot) return
+    if (!this.crowd || !this.snapshot || !this.batch) return
     const rect = this.renderer.domElement.getBoundingClientRect()
     const ndc = new Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
     const ray = new Raycaster()
     ray.setFromCamera(ndc, this.camera)
     const hit = ray.intersectObject(this.crowd, false)[0]
-    const index = hit?.faceIndex != null ? Math.floor(hit.faceIndex / this.facesPerPerson) : -1
+    const index = hit?.faceIndex != null ? personForFace(this.batch.personFaceStart, hit.faceIndex) : -1
     this.onPick?.(index >= 0 ? this.snapshot.people[index].id : null)
   }
 

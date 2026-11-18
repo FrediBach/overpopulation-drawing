@@ -1,3 +1,4 @@
+import type { BoneName } from '../assets/skeleton'
 import { placeCapsules, type Capsule, type Placement, type PosedBody } from '../poses/fk'
 import { evaluateConflicts, type CollisionWorld } from '../constraints/collision'
 import { clamp } from '../math/geometry'
@@ -17,6 +18,8 @@ export interface FitResult {
   capsules: Capsule[]
   maxPenetration: number
   iterations: number
+  /** Bones still in conflict when fitting failed. */
+  conflictBones: Set<BoneName>
 }
 
 /**
@@ -60,5 +63,6 @@ export function fitRoot(world: CollisionWorld, body: PosedBody, start: Placement
     capsules,
     maxPenetration: summary.maxPenetration,
     iterations: it,
+    conflictBones: summary.bones,
   }
 }

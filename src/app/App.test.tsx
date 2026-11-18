@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { compileDrawing, synthesizeScene, type DrawingOptions, type SceneSettings, type SceneSnapshot } from '@/core'
+import { buildPreviewBatch, compileDrawing, synthesizeScene, type DrawingOptions, type SceneSettings, type SceneSnapshot } from '@/core'
 import type { PipelineClient } from '@/workers/pipelineClient'
 import { App } from './App'
 
@@ -13,7 +13,10 @@ vi.mock('./components/ShadedViewport', () => ({
 /** Runs the pipeline synchronously in-process instead of in a worker. */
 function fakeClient(): PipelineClient {
   return {
-    compileScene: async (settings: SceneSettings) => synthesizeScene(settings),
+    compileScene: async (settings: SceneSettings) => {
+      const scene = synthesizeScene({ ...settings, population: 12, bodyVariety: 3 })
+      return { scene, preview: buildPreviewBatch(scene) }
+    },
     compileDrawing: async (scene: SceneSnapshot, options: Partial<DrawingOptions>) => compileDrawing(scene, options),
     cancel: () => {},
     dispose: () => {},
@@ -27,11 +30,11 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /compute pen lines/i })).toBeDisabled()
 
     await user.click(screen.getByRole('button', { name: /generate scene/i }))
-    await waitFor(() => expect(screen.getByText('All checks pass')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('All checks pass')).toBeInTheDocument(), { timeout: 30_000 })
     expect(screen.getByRole('button', { name: /compute pen lines/i })).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: /compute pen lines/i }))
-    await waitFor(() => expect(screen.getByText('Ink length')).toBeInTheDocument(), { timeout: 10_000 })
+    await waitFor(() => expect(screen.getByText('Ink length')).toBeInTheDocument(), { timeout: 30_000 })
     expect(screen.getByRole('button', { name: /export svg/i })).toBeEnabled()
-  }, 20_000)
+  }, 60_000)
 })

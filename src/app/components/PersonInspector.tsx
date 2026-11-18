@@ -1,13 +1,14 @@
-import { BODY_VARIANT_BY_ID, MOTIF_BY_ID, POSE_FAMILY_BY_ID, type DrawingResult, type SceneSnapshot } from '@/core'
+import { ARCHETYPES, MOTIF_BY_ID, type DrawingResult, type SceneSnapshot } from '@/core'
 import { Badge } from '@/components/ui/badge'
 
 export function PersonInspector({ scene, drawing, id }: { scene: SceneSnapshot; drawing: DrawingResult | null; id: number }) {
   const person = scene.people[id]
   if (!person) return null
-  const family = POSE_FAMILY_BY_ID[person.family]
+  const body = scene.bodies[person.bodyIndex]
   const failures = scene.validation.failures.filter((f) => f.personId === id || f.otherId === id)
   const contacts = scene.relationships.filter((r) => r.a === id || r.b === id)
   const ink = drawing?.visibleMmByPerson[id]
+  const limbs = person.pose ? Object.entries(person.pose.limbs).map(([limb, l]) => `${limb} ${l.mode}`) : ['blended pose']
   return (
     <div className="grid gap-1 text-xs">
       <div className="flex items-center gap-2">
@@ -16,7 +17,12 @@ export function PersonInspector({ scene, drawing, id }: { scene: SceneSnapshot; 
         {failures.length > 0 && <Badge variant="destructive">invalid</Badge>}
       </div>
       <div className="text-muted-foreground">
-        {family.label} · {person.variant} · {BODY_VARIANT_BY_ID[person.bodyVariant]?.label} · {person.outfit}
+        {ARCHETYPES[person.posture].label} · {person.outfit}
+      </div>
+      <div className="text-muted-foreground">{limbs.join(' · ')}</div>
+      <div className="text-muted-foreground">
+        Body: height {body.height.toFixed(2)}, mass {body.mass.toFixed(2)}, muscle {body.muscle.toFixed(2)}, fem {body.femininity.toFixed(2)}
+        {body.child > 0 ? `, child ${body.child.toFixed(2)}` : ''}
       </div>
       {person.motifId && <div className="text-muted-foreground">Motif: {MOTIF_BY_ID[person.motifId]?.label} (group {person.groupId})</div>}
       <div className="text-muted-foreground">

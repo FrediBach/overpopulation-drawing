@@ -1,6 +1,7 @@
-import { buildBodyMesh } from '../assets/bodyMesh'
-import { EXPORT_RESOLUTION, getCapsuleTemplate, type MeshResolution } from '../assets/capsuleTemplate'
 import type { BodyRegion } from '../assets/skeleton'
+import { EXPORT_CELL, getBodyAsset } from '../body/asset'
+import { featureFields } from '../body/features'
+import { skinBody } from '../body/skin'
 import { createProjector } from '../camera/projection'
 import { environmentSegments } from '../contours/environment'
 import { extractBodyLines } from '../contours/extract'
@@ -13,7 +14,7 @@ import { clipStrokes } from '../strokes/clip'
 import { orderStrokes } from '../strokes/order'
 import { cleanupStrokes } from '../strokes/postprocess'
 import type { Stroke, VisiblePiece } from '../strokes/types'
-import { personCapsules } from '../synthesis/personGeometry'
+import { personMatrices } from '../synthesis/personGeometry'
 import { DEFAULT_HLR, visibleIntervals, type HlrOptions } from '../visibility/hlr'
 import { OccluderSet, TriangleGrid } from '../visibility/occluders'
 import { estimatePlot, type PlotEstimate, type PlotterProfile, DEFAULT_PLOTTER } from '../export/plotEstimate'
@@ -21,7 +22,11 @@ import { estimatePlot, type PlotEstimate, type PlotterProfile, DEFAULT_PLOTTER }
 export interface DrawingOptions {
   /** Override the scene's paper profile (e.g. A3 proof of an A2 scene). */
   paperId?: string
-  resolution: MeshResolution
+  /**
+   * Polygonisation cell size for the drawn surface (metres, reference adult),
+   * or 'auto' to match the paper scale: about 0.45 mm of paper per cell.
+   */
+  cell: number | 'auto'
   /** Include authored feature curves (swimwear, hairline). */
   details: boolean
   simplifyToleranceMm: number
@@ -37,7 +42,7 @@ export interface DrawingOptions {
 }
 
 export const DEFAULT_DRAWING_OPTIONS: DrawingOptions = {
-  resolution: EXPORT_RESOLUTION,
+  cell: 'auto',
   details: true,
   simplifyToleranceMm: 0.05,
   minFragmentMm: 0.3,
@@ -46,6 +51,14 @@ export const DEFAULT_DRAWING_OPTIONS: DrawingOptions = {
   contributingMm: 2,
   recognisableHeadMm: 1,
   recognisableBodyMm: 4,
+}
+
+/** Quantised so body assets are shared across drawings at similar scales. */
+const CELL_STEPS = [0.012, EXPORT_CELL, 0.02, 0.024, 0.028]
+
+export function autoCell(mmPerMetre: number): number {
+  const ideal = 0.45 / mmPerMetre
+  return CELL_STEPS.reduce((best, c) => (Math.abs(c - ideal) < Math.abs(best - ideal) ? c : best))
 }
 
 export interface PopulationAccounting {
@@ -62,7 +75,7 @@ export interface DrawingReport {
   mmPerMetre: number
   population: PopulationAccounting
   thresholds: { contributingMm: number; recognisableHeadMm: number; recognisableBodyMm: number }
-  geometry: { triangles: number; occluders: number; candidateSegments: number; visiblePieces: number }
+  geometry: { cell: number; triangles: number; occluders: number; candidateSegments: number; visiblePieces: number }
   lines: PlotEstimate & { lengthByClassMm: Record<LineClass, number> }
   timingMs: { meshes: number; index: number; visibility: number; strokes: number; total: number }
 }
@@ -90,23 +103,27 @@ export function compileDrawing(
   const paper = (opts.paperId && PAPER_BY_ID[opts.paperId]) || scene.paper
   const projector = createProjector(scene.camera, paper)
   const rect = projector.drawRect
-  const template = getCapsuleTemplate(opts.resolution)
   const invalid = new Set(scene.validation.invalidPeople)
+  const cell = opts.cell === 'auto' ? autoCell(projector.mmPerMetre) : opts.cell
 
   // 1. Bake posed meshes, project, collect occluders and candidates.
   const occluders = new OccluderSet(1 << 16)
   const candidates: CandidateSegment[] = []
   const inFrame = new Uint8Array(scene.people.length)
   let vertexBase = 0
+  let keyBase = 0
   let triangles = 0
   const margin = 5
   scene.people.forEach((person, i) => {
-    const mesh = buildBodyMesh(personCapsules(person), opts.resolution)
-    triangles += template.faceCount * mesh.capsuleCount
+    const asset = getBodyAsset(scene.bodies[person.bodyIndex], cell)
+    const positions = skinBody(asset, personMatrices(person, scene.bodies))
+    triangles += asset.indices.length / 3
     const before = candidates.length
     const occBefore = occluders.count
-    const { bounds } = extractBodyLines(mesh, person.id, vertexBase, person.outfit, opts.details, projector, occluders, candidates)
-    vertexBase += template.vertexCount * mesh.capsuleCount
+    const features = opts.details ? featureFields(asset, person.outfit) : []
+    const { bounds, keysUsed } = extractBodyLines(asset, positions, person.id, vertexBase, keyBase, features, projector, occluders, candidates)
+    vertexBase += positions.length / 3
+    keyBase += keysUsed
     const overlaps = bounds.x1 >= rect.x0 && bounds.x0 <= rect.x1 && bounds.y1 >= rect.y0 && bounds.y0 <= rect.y1
     inFrame[i] = overlaps ? 1 : 0
     const nearFrame =
@@ -117,7 +134,7 @@ export function compileDrawing(
     }
     if (i % 50 === 0) onProgress?.(0.25 * (i / scene.people.length), 'Baking posed surfaces')
   })
-  candidates.push(...environmentSegments(scene, projector, vertexBase))
+  candidates.push(...environmentSegments(scene, projector, keyBase))
   const tMesh = performance.now()
 
   // 2. Index occluders in paper space.
@@ -151,8 +168,8 @@ export function compileDrawing(
         owner: seg.owner,
         cls: seg.cls,
         region: seg.region,
-        k0: a <= 0 ? seg.ia : uniqueKey--,
-        k1: b >= 1 ? seg.ib : uniqueKey--,
+        k0: a <= 0 ? seg.k0 : uniqueKey--,
+        k1: b >= 1 ? seg.k1 : uniqueKey--,
         x0: seg.u0 + (seg.u1 - seg.u0) * a,
         y0: seg.v0 + (seg.v1 - seg.v0) * a,
         x1: seg.u0 + (seg.u1 - seg.u0) * b,
@@ -211,7 +228,7 @@ export function compileDrawing(
         recognisableHeadMm: opts.recognisableHeadMm,
         recognisableBodyMm: opts.recognisableBodyMm,
       },
-      geometry: { triangles, occluders: occluders.count, candidateSegments: candidates.length, visiblePieces: pieces.length },
+      geometry: { cell, triangles, occluders: occluders.count, candidateSegments: candidates.length, visiblePieces: pieces.length },
       lines: { ...estimatePlot(strokes, opts.plotter), lengthByClassMm },
       timingMs: {
         meshes: tMesh - t0,

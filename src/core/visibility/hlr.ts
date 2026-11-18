@@ -11,9 +11,13 @@ export interface SegmentInput {
   u1: number
   v1: number
   d1: number
-  /** Global vertex ids of the endpoints (-1 when not on a mesh). */
-  ia: number
-  ib: number
+  /**
+   * Global vertex ids whose incident triangles must not hide this segment
+   * (the face a contour runs across, or an edge's endpoints); -1 = unused.
+   */
+  s0: number
+  s1: number
+  s2: number
 }
 
 export interface HlrOptions {
@@ -50,7 +54,7 @@ function e(px: number, py: number, qx: number, qy: number, x: number, y: number)
  * suppression); the rest of the owner's body still occludes it.
  */
 export function visibleIntervals(seg: SegmentInput, occ: OccluderSet, grid: TriangleGrid, opts: HlrOptions = DEFAULT_HLR): number[] {
-  const { u0, v0, d0, u1, v1, d1, ia, ib } = seg
+  const { u0, v0, d0, u1, v1, d1, s0, s1, s2 } = seg
   const du = u1 - u0
   const dv = v1 - v0
   const len = Math.hypot(du, dv)
@@ -66,8 +70,9 @@ export function visibleIntervals(seg: SegmentInput, occ: OccluderSet, grid: Tria
     if (occ.minDepth[k] >= maxSegDepth - eps) return
     const vk = k * 3
     const a = verts[vk], b = verts[vk + 1], c = verts[vk + 2]
-    if (ia >= 0 && (a === ia || b === ia || c === ia)) return
-    if (ib >= 0 && (a === ib || b === ib || c === ib)) return
+    if (s0 >= 0 && (a === s0 || b === s0 || c === s0)) return
+    if (s1 >= 0 && (a === s1 || b === s1 || c === s1)) return
+    if (s2 >= 0 && (a === s2 || b === s2 || c === s2)) return
     const o = k * 9
     const ax = t[o], ay = t[o + 1], ad = t[o + 2]
     const bx = t[o + 3], by = t[o + 4], bd = t[o + 5]

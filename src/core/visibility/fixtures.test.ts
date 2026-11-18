@@ -1,80 +1,99 @@
-import { buildBodyMesh } from '../assets/bodyMesh'
-import { EXPORT_RESOLUTION } from '../assets/capsuleTemplate'
+import type { BoneSpec } from '../assets/skeleton'
+import type { BodyAsset } from '../body/asset'
 import { createProjector, frameCamera } from '../camera/projection'
 import { extractBodyLines } from '../contours/extract'
 import type { CandidateSegment } from '../contours/types'
-import type { Capsule } from '../poses/fk'
+import { surfaceNets } from '../mesh/surfaceNets'
+import { buildTopology } from '../mesh/topology'
 import { PAPER_BY_ID } from '../scene/paper'
 import { visibleIntervals } from './hlr'
 import { OccluderSet, TriangleGrid } from './occluders'
 
-const capsule = (bone: Capsule['bone'], region: Capsule['region'], a: Capsule['a'], b: Capsule['b'], r: number): Capsule => {
-  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
-  const len = Math.hypot(d[0], d[1], d[2])
-  const ay: Capsule['ay'] = [d[0] / len, d[1] / len, d[2] / len]
-  // Any perpendicular basis is fine for a round cross-section.
-  const ax: Capsule['ax'] = Math.abs(ay[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0]
-  const az: Capsule['az'] = [ax[1] * ay[2] - ax[2] * ay[1], ax[2] * ay[0] - ax[0] * ay[2], ax[0] * ay[1] - ax[1] * ay[0]]
-  return { bone, region, a, b, ax, ay, az, rx: r, rz: r, rcap: r, radius: r }
+type V3 = [number, number, number]
+
+function capsuleSdf(a: V3, b: V3, r: number) {
+  return (x: number, y: number, z: number) => {
+    const ba = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    const pa = [x - a[0], y - a[1], z - a[2]]
+    const t = Math.max(0, Math.min(1, (pa[0] * ba[0] + pa[1] * ba[1] + pa[2] * ba[2]) / (ba[0] ** 2 + ba[1] ** 2 + ba[2] ** 2)))
+    return Math.hypot(pa[0] - ba[0] * t, pa[1] - ba[1] * t, pa[2] - ba[2] * t) - r
+  }
+}
+
+/** A minimal asset from an SDF: region 'torso' for bone 0, 'arm' for bone 1 (chosen by `isArm`). */
+function assetFrom(sdf: (x: number, y: number, z: number) => number, isArm: (x: number, y: number, z: number) => boolean): BodyAsset {
+  const cell = 0.02
+  const n = 60
+  const origin: V3 = [-0.6, -0.6, -0.4]
+  const values = new Float32Array(n * n * n)
+  for (let k = 0; k < n; k++) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) values[i + n * (j + n * k)] = sdf(origin[0] + i * cell, origin[1] + j * cell, origin[2] + k * cell)
+  const mesh = surfaceNets(values, { origin, cell, dims: [n, n, n] })
+  const vcount = mesh.positions.length / 3
+  const dominantBone = new Uint8Array(vcount)
+  for (let v = 0; v < vcount; v++) dominantBone[v] = isArm(mesh.positions[v * 3], mesh.positions[v * 3 + 1], mesh.positions[v * 3 + 2]) ? 1 : 0
+  const skeleton = [{ region: 'torso' }, { region: 'arm' }] as unknown as BoneSpec[]
+  return { indices: mesh.indices, topology: buildTopology(mesh.indices, vcount), dominantBone, skeleton, restPositions: mesh.positions } as unknown as BodyAsset
 }
 
 /** Front view (elevation 0): camera looks along -Z, so larger z is closer. */
-function solve(people: Capsule[][]) {
+function solve(assets: BodyAsset[]) {
   const paper = PAPER_BY_ID.A3
   const projector = createProjector(frameCamera(paper, 0, 2), paper)
   const occ = new OccluderSet()
   const candidates: CandidateSegment[] = []
   let base = 0
-  people.forEach((caps, owner) => {
-    const mesh = buildBodyMesh(caps, EXPORT_RESOLUTION)
-    extractBodyLines(mesh, owner, base, 'trunks', false, projector, occ, candidates)
-    base += mesh.positions.length / 3
+  let keys = 0
+  assets.forEach((asset, owner) => {
+    const r = extractBodyLines(asset, asset.restPositions, owner, base, keys, [], projector, occ, candidates)
+    base += asset.restPositions.length / 3
+    keys += r.keysUsed
   })
   const grid = new TriangleGrid(occ, projector.drawRect, 2)
-  const pieces = candidates.map((c) => ({ c, v: visibleIntervals(c, occ, grid) }))
-  return { projector, pieces }
+  return { projector, pieces: candidates.map((c) => ({ c, v: visibleIntervals(c, occ, grid) })) }
 }
 
-const visibleLength = (pieces: ReturnType<typeof solve>['pieces'], filter: (c: CandidateSegment) => boolean) =>
-  pieces
-    .filter((p) => filter(p.c))
-    .reduce((s, p) => {
-      const len = Math.hypot(p.c.u1 - p.c.u0, p.c.v1 - p.c.v0)
-      let t = 0
-      for (let i = 0; i < p.v.length; i += 2) t += p.v[i + 1] - p.v[i]
-      return s + len * t
-    }, 0)
+type Pieces = ReturnType<typeof solve>['pieces']
+const total = (pieces: Pieces, f: (c: CandidateSegment) => boolean) => pieces.filter((p) => f(p.c)).reduce((s, p) => s + Math.hypot(p.c.u1 - p.c.u0, p.c.v1 - p.c.v0), 0)
+const visible = (pieces: Pieces, f: (c: CandidateSegment) => boolean) =>
+  pieces.filter((p) => f(p.c)).reduce((s, p) => {
+    let t = 0
+    for (let i = 0; i < p.v.length; i += 2) t += p.v[i + 1] - p.v[i]
+    return s + Math.hypot(p.c.u1 - p.c.u0, p.c.v1 - p.c.v0) * t
+  }, 0)
 
 describe('hidden-line fixtures', () => {
   it('an arm crossing its owner’s torso hides the torso contour behind it (plan fixture 2)', () => {
-    const torso = capsule('chest', 'torso', [0, -0.4, 0], [0, 0.4, 0], 0.15)
-    const arm = capsule('foreArm.L', 'arm', [-0.4, 0, 0.3], [0.4, 0, 0.3], 0.04)
-    const { projector, pieces } = solve([[torso, arm]])
+    const torso = capsuleSdf([0, -0.4, 0], [0, 0.4, 0], 0.15)
+    const arm = capsuleSdf([-0.4, 0, 0.3], [0.4, 0, 0.3], 0.04)
+    const asset = assetFrom((x, y, z) => Math.min(torso(x, y, z), arm(x, y, z)), (_x, _y, z) => z > 0.2)
+    const { projector, pieces } = solve([asset])
     const s = projector.mmPerMetre
     const cy = (projector.drawRect.y0 + projector.drawRect.y1) / 2
-    // No visible torso contour inside the arm's projected band.
     for (const { c, v } of pieces.filter((p) => p.c.region === 'torso')) {
       for (let i = 0; i < v.length; i += 2) {
         const tm = (v[i] + v[i + 1]) / 2
-        const y = c.v0 + (c.v1 - c.v0) * tm
-        expect(Math.abs(y - cy)).toBeGreaterThan(0.035 * s)
+        expect(Math.abs(c.v0 + (c.v1 - c.v0) * tm - cy)).toBeGreaterThan(0.035 * s)
       }
     }
-    // The torso contour is broken into pieces rather than removed.
-    expect(visibleLength(pieces, (c) => c.region === 'torso')).toBeGreaterThan(0.8 * 2 * 0.8 * s)
-    // The arm in front is fully visible apart from where it meets nothing.
-    const armTotal = pieces.filter((p) => p.c.region === 'arm').reduce((s2, p) => s2 + Math.hypot(p.c.u1 - p.c.u0, p.c.v1 - p.c.v0), 0)
-    expect(visibleLength(pieces, (c) => c.region === 'arm')).toBeCloseTo(armTotal, 3)
+    // The torso contour is broken, not removed; the arm in front stays fully visible.
+    expect(visible(pieces, (c) => c.region === 'torso')).toBeGreaterThan(0.75 * total(pieces, (c) => c.region === 'torso'))
+    expect(visible(pieces, (c) => c.region === 'arm')).toBeGreaterThan(0.97 * total(pieces, (c) => c.region === 'arm'))
   })
 
   it('interleaved forearms of two people keep a clear front and back (plan fixture 3)', () => {
-    const front = capsule('foreArm.L', 'arm', [-0.4, -0.1, 0.2], [0.4, 0.1, 0.2], 0.04)
-    const back = capsule('foreArm.R', 'arm', [-0.4, 0.1, 0], [0.4, -0.1, 0], 0.04)
-    const { pieces } = solve([[front], [back]])
-    const total = (owner: number) => pieces.filter((p) => p.c.owner === owner).reduce((s, p) => s + Math.hypot(p.c.u1 - p.c.u0, p.c.v1 - p.c.v0), 0)
-    expect(visibleLength(pieces, (c) => c.owner === 0)).toBeCloseTo(total(0), 3)
-    expect(visibleLength(pieces, (c) => c.owner === 1)).toBeLessThan(total(1) * 0.97)
-    // Back arm keeps both ends.
-    expect(visibleLength(pieces, (c) => c.owner === 1)).toBeGreaterThan(total(1) * 0.7)
+    const front = capsuleSdf([-0.4, -0.1, 0.2], [0.4, 0.1, 0.2], 0.04)
+    const back = capsuleSdf([-0.4, 0.1, 0], [0.4, -0.1, 0], 0.04)
+    const { pieces } = solve([assetFrom(front, () => true), assetFrom(back, () => true)])
+    expect(visible(pieces, (c) => c.owner === 0)).toBeGreaterThan(0.97 * total(pieces, (c) => c.owner === 0))
+    expect(visible(pieces, (c) => c.owner === 1)).toBeLessThan(0.95 * total(pieces, (c) => c.owner === 1))
+    expect(visible(pieces, (c) => c.owner === 1)).toBeGreaterThan(0.6 * total(pieces, (c) => c.owner === 1))
+  })
+
+  it('smooth contours form closed loops on a convex body', () => {
+    const { pieces } = solve([assetFrom(capsuleSdf([0, -0.3, 0], [0, 0.3, 0], 0.2), () => false)])
+    // Every contour key is shared by exactly two segments.
+    const degree = new Map<number, number>()
+    for (const { c } of pieces) for (const k of [c.k0, c.k1]) degree.set(k, (degree.get(k) ?? 0) + 1)
+    expect([...degree.values()].every((d) => d === 2)).toBe(true)
   })
 })

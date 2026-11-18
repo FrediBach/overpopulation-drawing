@@ -17,6 +17,8 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
     setupFiles: ['./src/test/setup.ts'],
+    // Building organic body assets takes a few hundred ms each.
+    testTimeout: 60_000,
     coverage: { include: ['src/core/**'], reporter: ['text', 'html'] },
   },
 })

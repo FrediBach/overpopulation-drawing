@@ -1,3 +1,4 @@
+import type { BoneName } from '../assets/skeleton'
 import type { Capsule } from '../poses/fk'
 import { segmentSegmentDistSq } from '../math/geometry'
 
@@ -107,6 +108,8 @@ export interface ConflictSummary {
   /** Yaw change (radians) suggested by the off-centre pushes. */
   yawPush: number
   conflicts: number
+  /** Candidate bones involved in conflicts (for targeted pose accommodation). */
+  bones: Set<BoneName>
 }
 
 /**
@@ -125,6 +128,7 @@ export function evaluateConflicts(
   let yawNum = 0
   let yawDen = 0
   let conflicts = 0
+  const bones = new Set<BoneName>()
   const out = { s: 0, t: 0, cx: 0, cy: 0, cz: 0, dx: 0, dy: 0, dz: 0 }
   for (const c of capsules) {
     const { min, max } = capsuleBounds(c)
@@ -138,6 +142,7 @@ export function evaluateConflicts(
       if (pen > maxPenetration) maxPenetration = pen
       if (pen <= 0) return
       conflicts++
+      bones.add(c.bone)
       let nx = out.dx
       let nz = out.dz
       let nl = Math.hypot(nx, nz)
@@ -168,5 +173,6 @@ export function evaluateConflicts(
     pushZ,
     yawPush: yawDen > 1e-9 ? yawNum / yawDen : 0,
     conflicts,
+    bones,
   }
 }

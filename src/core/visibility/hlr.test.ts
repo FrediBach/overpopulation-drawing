@@ -11,7 +11,7 @@ function setup(tris: number[][], ids: number[][] = []) {
   return { occ, grid }
 }
 
-const seg = (d: number, ia = -1, ib = -1): SegmentInput => ({ u0: 0, v0: 5, d0: d, u1: 10, v1: 5, d1: d, ia, ib })
+const seg = (d: number, s0 = -1, s1 = -1): SegmentInput => ({ u0: 0, v0: 5, d0: d, u1: 10, v1: 5, d1: d, s0, s1, s2: -1 })
 
 describe('visibleIntervals', () => {
   it('hides a segment entirely behind a large triangle', () => {
@@ -46,7 +46,7 @@ describe('visibleIntervals', () => {
     expect(v[1]).toBeCloseTo(0.5, 3)
   })
 
-  it('ignores faces incident to the segment, but not the rest of the body', () => {
+  it('ignores faces sharing a suppressed vertex, but not the rest of the body', () => {
     const { occ, grid } = setup([[-10, 0, 1, 20, 0, 1, 5, 24, 1]], [[7, 8, 9]])
     expect(visibleIntervals(seg(2, 7, 99), occ, grid)).toEqual([0, 1])
     expect(visibleIntervals(seg(2, 50, 99), occ, grid)).toEqual([])

@@ -1,15 +1,16 @@
-import { BODY_VARIANTS, BODY_VARIANT_BY_ID, type BodyVariant } from '../assets/bodyVariants'
-import { OUTFITS } from '../assets/bodyMesh'
-import { BONE_NAMES } from '../assets/skeleton'
+import type { BoneName, BoneSpec } from '../assets/skeleton'
+import { getBodySkeleton } from '../body/asset'
+import { OUTFITS } from '../body/features'
+import { sampleBodyParams, type BodyParams } from '../body/params'
 import { frameCamera } from '../camera/projection'
 import { CollisionWorld } from '../constraints/collision'
-import { clampToLimits } from '../constraints/jointLimits'
 import { clamp, DEG, lerp } from '../math/geometry'
-import { createRng, weightedPick, type Rng } from '../math/rng'
-import { AVERAGE_MOTIF_SIZE, MOTIFS, type Motif, type MotifMember } from '../motifs/motifLibrary'
-import { poseBody, type Capsule, type PosedBody } from '../poses/fk'
-import { familiesForPosture, POSE_FAMILY_BY_ID, resolveJoints } from '../poses/poseLibrary'
-import { POSTURES, type JointRotations, type PoseFamily, type Posture } from '../poses/types'
+import { createRng, weightedPick } from '../math/rng'
+import { AVERAGE_MOTIF_SIZE, MOTIFS, type Motif } from '../motifs/motifLibrary'
+import { ARCHETYPES } from '../poses/archetypes'
+import { poseBody, type Capsule } from '../poses/fk'
+import { buildPose, generateValidPose, mutatePoseParams } from '../poses/generate'
+import { LIMBS, POSTURES, type Limb, type PoseParams, type PoseResult, type Posture } from '../poses/types'
 import { PAPER_BY_ID } from '../scene/paper'
 import {
   SCENE_SCHEMA_VERSION,
@@ -21,14 +22,14 @@ import {
 } from '../scene/types'
 import { validateScene } from '../validation/validate'
 import { createBeachLayout, densityAt, preferredYaw, viewWidthFor } from './composition'
-import { fitRoot, type FitOptions } from './fit'
+import { fitRoot, type FitOptions, type FitResult } from './fit'
 
 export type ProgressFn = (fraction: number, label: string) => void
 
 interface MemberRequest {
-  family: PoseFamily
-  variant: string
-  bodyVariant: BodyVariant
+  posture: Posture
+  hints?: Partial<Record<Limb, string>>
+  bodyIndex: number
   x: number
   z: number
   yaw: number
@@ -36,41 +37,31 @@ interface MemberRequest {
   towel: boolean
 }
 
-const ADULTS = BODY_VARIANTS.filter((v) => v.id !== 'child')
-
-function jitterJoints(rng: Rng, family: PoseFamily, base: JointRotations): JointRotations {
-  const joints: JointRotations = {}
-  for (const name of BONE_NAMES) {
-    const r = base[name]
-    if (r) joints[name] = [r[0], r[1], r[2]]
-  }
-  for (const adj of family.adjust) {
-    const r = joints[adj.bone] ?? [0, 0, 0]
-    r[adj.axis] += clamp(rng.normal() * 0.5, -1, 1) * adj.range
-    joints[adj.bone] = r
-  }
-  for (const name of Object.keys(joints) as (keyof JointRotations)[]) {
-    joints[name] = clampToLimits(name, joints[name]!)
-  }
-  return joints
+function limbOfBone(bone: BoneName): Limb | null {
+  const m = /^(upperArm|foreArm|hand|thigh|shin|foot)\.(L|R)$/.exec(bone)
+  if (!m) return null
+  return `${['thigh', 'shin', 'foot'].includes(m[1]) ? 'leg' : 'arm'}${m[2]}` as Limb
 }
 
 function motifWeight(motif: Motif, mix: Record<Posture, number>): number {
   const total = POSTURES.reduce((s, p) => s + Math.max(0, mix[p]), 0) || 1
   let w = 0
   for (const m of motif.members) {
-    const posture = POSE_FAMILY_BY_ID[m.family].posture
-    const share = Math.max(0, mix[posture]) / total
+    const share = Math.max(0, mix[m.posture]) / total
     if (share <= 0) return 0
     w += share
   }
   return w / motif.members.length
 }
 
+/** Number of continuous pose mutations tried before giving up on a placement. */
+const ACCOMMODATION_TRIES = 6
+
 /**
- * Scene compiler (plan §7): place a conservative composition from motifs and
- * single figures, fit each body locally against already-committed neighbours,
- * accommodate with alternate limb placements, then validate everything.
+ * Scene compiler (plan §7): build a bank of organic bodies, place motifs and
+ * single figures with freshly generated poses, fit each against committed
+ * neighbours, accommodate conflicts by continuously mutating the conflicting
+ * limbs, then validate everything.
  */
 export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn): SceneSnapshot {
   const t0 = performance.now()
@@ -81,6 +72,22 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
   const placeRng = createRng(settings.seed, 'placement')
   const poseRng = createRng(settings.seed, 'poses')
   const bodyRng = createRng(settings.seed, 'bodies')
+
+  // Body bank.
+  const adultCount = Math.max(1, Math.round(settings.bodyVariety))
+  const childCount = settings.childShare > 0 ? Math.max(1, Math.round(settings.bodyVariety * 0.25)) : 0
+  const bodies: BodyParams[] = [
+    ...Array.from({ length: adultCount }, () => sampleBodyParams(bodyRng, false)),
+    ...Array.from({ length: childCount }, () => sampleBodyParams(bodyRng, true)),
+  ]
+  const skeletons: BoneSpec[][] = bodies.map((b, i) => {
+    onProgress?.(0.25 * (i / bodies.length), `Building bodies ${i + 1} / ${bodies.length}`)
+    return getBodySkeleton(b)
+  })
+  const pickBody = (child: boolean): number =>
+    (child || bodyRng.chance(settings.childShare)) && childCount > 0
+      ? adultCount + bodyRng.int(0, childCount)
+      : bodyRng.int(0, adultCount)
 
   const crowding = clamp(settings.crowding, 0, 1)
   const fitOptions: FitOptions = {
@@ -132,7 +139,7 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
 
   const singleYaw = (posture: Posture, x: number, z: number): number => {
     const base = preferredYaw(x, z)
-    if (posture === 'lyingBack' || posture === 'lyingFront' || posture === 'reclining') {
+    if (posture === 'lyingBack' || posture === 'lyingFront' || posture === 'lyingSide' || posture === 'reclining') {
       const r = placeRng.next()
       const turn = r < 0.55 ? 0 : r < 0.75 ? Math.PI : r < 0.88 ? Math.PI / 2 : -Math.PI / 2
       return base + turn + placeRng.normal() * 0.15
@@ -141,33 +148,43 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
   }
 
   const tryCommit = (req: MemberRequest, motifId: string | null, groupId: number | null): boolean => {
-    const family = req.family
-    const variantOrder = [req.variant, ...family.variants.map((v) => v.id).filter((id) => id !== req.variant)]
-    // Each alternative carries the same jitter so accommodation is a limb change, not a new person.
-    const jitterSeed = poseRng.int(0, 2 ** 31)
-    let best: { ok: boolean; body: PosedBody; joints: JointRotations; variant: string; fit: ReturnType<typeof fitRoot> } | null = null
-    for (const variantId of variantOrder) {
-      const joints = jitterJoints(createRng(jitterSeed, 'jitter'), family, resolveJoints(family, variantId))
-      const body = poseBody(req.bodyVariant, family.root, joints)
-      const fit = fitRoot(world, body, { x: req.x, z: req.z, yaw: req.yaw }, { ...fitOptions, maxDrift: req.maxDrift })
-      if (fit.ok) {
-        best = { ok: true, body, joints, variant: variantId, fit }
-        break
+    const skeleton = skeletons[req.bodyIndex]
+    const generated = generateValidPose(skeleton, req.posture, poseRng, 24, req.hints)
+    if (!generated) return false
+    let params: PoseParams = generated.params
+    let pose: PoseResult = generated.result
+    const start = { x: req.x, z: req.z, yaw: req.yaw }
+    const opts = { ...fitOptions, maxDrift: req.maxDrift }
+    let fit: FitResult = fitRoot(world, poseBody(skeleton, pose.root, pose.joints), start, opts)
+    let accommodated = false
+    // Pose accommodation: continuously reshape the limbs that collide.
+    for (let k = 0; !fit.ok && k < ACCOMMODATION_TRIES; k++) {
+      const focus = [...new Set([...fit.conflictBones].map(limbOfBone).filter((l): l is Limb => l !== null))]
+      const limbs = focus.length > 0 ? focus : [LIMBS[poseRng.int(0, 4)]]
+      const candidate = mutatePoseParams(params, poseRng, 0.25 + 0.08 * k, limbs)
+      const result = buildPose(skeleton, candidate)
+      if (result.problems.length > 0) continue
+      const attempt = fitRoot(world, poseBody(skeleton, result.root, result.joints), start, opts)
+      if (attempt.ok || attempt.maxPenetration < fit.maxPenetration) {
+        params = candidate
+        pose = result
+        fit = attempt
+        accommodated = true
       }
     }
-    if (!best) return false
-    const { placement } = best.fit
+    if (!fit.ok) return false
+    const { placement } = fit
     if (densityAt(layout, placement.x, placement.z) <= 0) return false
     const id = people.length
-    const accommodated = best.variant !== req.variant
     if (accommodated) accommodations++
     people.push({
       id,
-      bodyVariant: req.bodyVariant.id,
-      family: family.id,
-      variant: best.variant,
+      bodyIndex: req.bodyIndex,
+      posture: req.posture,
+      pose: params,
+      root: pose.root,
+      joints: pose.joints,
       outfit: bodyRng.pick(OUTFITS),
-      joints: best.joints,
       x: placement.x,
       z: placement.z,
       yaw: placement.yaw,
@@ -175,25 +192,24 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
       groupId,
       accommodated,
     })
-    capsulesByPerson.push(best.fit.capsules)
-    world.add(id, best.fit.capsules)
-    if (family.towel && (req.towel || bodyRng.chance(0.55))) {
-      const sitting = family.posture === 'sitting'
+    capsulesByPerson.push(fit.capsules)
+    world.add(id, fit.capsules)
+    const archetype = ARCHETYPES[req.posture]
+    if (archetype.towel && (req.towel || bodyRng.chance(0.55))) {
+      const h = bodies[req.bodyIndex].height
+      const sitting = req.posture === 'sitting' || req.posture === 'reclining'
       towels.push({
         id: towels.length,
         ownerId: id,
         x: placement.x,
         z: placement.z,
         yaw: placement.yaw + bodyRng.normal() * 0.06,
-        width: bodyRng.range(0.75, 0.95) * req.bodyVariant.height,
-        length: (sitting ? bodyRng.range(1.2, 1.5) : bodyRng.range(1.65, 1.9)) * req.bodyVariant.height,
+        width: bodyRng.range(0.75, 0.95) * h,
+        length: (sitting ? bodyRng.range(1.3, 1.6) : bodyRng.range(1.65, 1.9)) * h,
       })
     }
     return true
   }
-
-  const pickBody = (child: boolean): BodyVariant =>
-    child || bodyRng.chance(settings.childShare) ? BODY_VARIANT_BY_ID.child : bodyRng.pick(ADULTS)
 
   let lastReport = 0
   while (people.length < target && attempts < maxAttempts) {
@@ -208,13 +224,13 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
       const sin = Math.sin(frameYaw)
       const groupId = groupCounter++
       let placed = 0
-      for (const member of motif.members as MotifMember[]) {
+      for (const member of motif.members) {
         if (people.length >= target) break
         const ok = tryCommit(
           {
-            family: POSE_FAMILY_BY_ID[member.family],
-            variant: member.variant,
-            bodyVariant: pickBody(!!member.child),
+            posture: member.posture,
+            hints: member.hints,
+            bodyIndex: pickBody(!!member.child),
             x: anchor.x + member.dx * cos + member.dz * sin,
             z: anchor.z - member.dx * sin + member.dz * cos,
             yaw: frameYaw + member.yaw * DEG + placeRng.normal() * 0.05,
@@ -230,12 +246,10 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
       if (placed > 0) motifInstances++
     } else {
       const posture = weightedPick(placeRng, settings.postureMix)
-      const family = placeRng.pick(familiesForPosture(posture))
       const ok = tryCommit(
         {
-          family,
-          variant: placeRng.pick(family.variants).id,
-          bodyVariant: pickBody(false),
+          posture,
+          bodyIndex: pickBody(false),
           x: anchor.x,
           z: anchor.z,
           yaw: singleYaw(posture, anchor.x, anchor.z),
@@ -254,7 +268,7 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
     }
     if (onProgress && people.length - lastReport >= 10) {
       lastReport = people.length
-      onProgress(0.9 * (people.length / Math.max(1, target)), `Placed ${people.length} / ${target}`)
+      onProgress(0.25 + 0.65 * (people.length / Math.max(1, target)), `Placed ${people.length} / ${target}`)
     }
   }
 
@@ -262,7 +276,7 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
   const { report, relationships } = validateScene(people, capsulesByPerson, layout)
 
   const postureCounts = Object.fromEntries(POSTURES.map((p) => [p, 0])) as Record<Posture, number>
-  for (const p of people) postureCounts[POSE_FAMILY_BY_ID[p.family].posture]++
+  for (const p of people) postureCounts[p.posture]++
 
   onProgress?.(1, 'Done')
   return {
@@ -273,6 +287,7 @@ export function synthesizeScene(settings: SceneSettings, onProgress?: ProgressFn
     paper,
     camera,
     beach: layout,
+    bodies,
     people,
     towels,
     relationships,

@@ -5,8 +5,10 @@ export type ColorMode = 'person' | 'posture' | 'validity' | 'visibility'
 export const POSTURE_COLORS: Record<Posture, [number, number, number]> = {
   lyingBack: [0.86, 0.62, 0.48],
   lyingFront: [0.78, 0.5, 0.42],
+  lyingSide: [0.85, 0.55, 0.7],
   sitting: [0.55, 0.66, 0.82],
   reclining: [0.62, 0.78, 0.6],
+  kneeling: [0.6, 0.55, 0.85],
   standing: [0.86, 0.78, 0.45],
 }
 

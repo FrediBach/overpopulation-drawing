@@ -8,12 +8,13 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ColorMode } from '@/preview/colors'
 import type { PipelineClient } from '@/workers/pipelineClient'
 import { ControlsPanel } from './components/ControlsPanel'
+import { LabPanel } from './components/LabPanel'
 import { LinesView } from './components/LinesView'
 import { PersonInspector } from './components/PersonInspector'
 import { ReportPanel } from './components/ReportPanel'
 import { ShadedViewport } from './components/ShadedViewport'
 import { useStudio } from './state/useStudio'
-import type { ViewTab } from './state/studioState'
+import type { StudioMode, ViewTab } from './state/studioState'
 
 const COLOR_MODES: { value: ColorMode; label: string }[] = [
   { value: 'person', label: 'Colour: person' },
@@ -42,10 +43,21 @@ export function App({ createClient }: { createClient?: () => PipelineClient }) {
     <TooltipProvider>
       <div className="grid h-screen grid-cols-[18rem_1fr_17rem] bg-background text-foreground">
         <aside className="overflow-y-auto border-r">
-          <header className="px-4 pt-4">
-            <h1 className="text-base font-semibold">Overpopulation Beach</h1>
-            <p className="text-xs text-muted-foreground">Crowd scene → pen-plotter drawing</p>
+          <header className="grid gap-3 px-4 pt-4">
+            <div>
+              <h1 className="text-base font-semibold">Overpopulation Beach</h1>
+              <p className="text-xs text-muted-foreground">Crowd scene → pen-plotter drawing</p>
+            </div>
+            <Tabs value={state.mode} onValueChange={(mode) => dispatch({ type: 'setMode', mode: mode as StudioMode })}>
+              <TabsList className="w-full">
+                <TabsTrigger value="crowd">Crowd</TabsTrigger>
+                <TabsTrigger value="lab">Pose lab</TabsTrigger>
+              </TabsList>
+            </Tabs>
           </header>
+          {state.mode === 'lab' ? (
+            <LabPanel lab={state.lab} busy={busy} onLab={(patch) => dispatch({ type: 'updateLab', patch })} onGenerate={actions.generateLab} />
+          ) : (
           <ControlsPanel
             settings={state.settings}
             details={state.details}
@@ -60,6 +72,17 @@ export function App({ createClient }: { createClient?: () => PipelineClient }) {
             onSaveScene={actions.saveScene}
             onLoadScene={actions.loadScene}
           />
+          )}
+          {state.mode === 'lab' && (
+            <div className="grid gap-2 px-4 pb-4">
+              <Button variant="secondary" onClick={actions.computeLines} disabled={busy || !state.scene}>
+                Compute pen lines
+              </Button>
+              <Button variant="outline" onClick={actions.exportSvg} disabled={!state.drawing}>
+                Export SVG + report
+              </Button>
+            </div>
+          )}
         </aside>
 
         <main className="flex min-w-0 flex-col">
@@ -115,6 +138,7 @@ export function App({ createClient }: { createClient?: () => PipelineClient }) {
             <TabsContent value="shaded" forceMount className="relative min-h-0 flex-1 data-[state=inactive]:hidden">
               <ShadedViewport
                 scene={state.scene}
+                preview={state.preview}
                 overlay={overlay}
                 resetToken={resetToken}
                 onPick={(id) => dispatch({ type: 'select', id })}

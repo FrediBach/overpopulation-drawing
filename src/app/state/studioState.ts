@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type DrawingResult, type SceneSettings, type SceneSnapshot } from '@/core'
+import { DEFAULT_LAB, DEFAULT_SETTINGS, type DrawingResult, type LabSettings, type PreviewBatch, type SceneSettings, type SceneSnapshot } from '@/core'
 import type { ColorMode } from '@/preview/colors'
 
 export type JobKind = 'scene' | 'drawing'
@@ -10,10 +10,15 @@ export interface JobState {
 }
 
 export type ViewTab = 'shaded' | 'lines'
+/** Crowd composes a beach; the lab studies the pose generator and bodies in isolation. */
+export type StudioMode = 'crowd' | 'lab'
 
 export interface StudioState {
+  mode: StudioMode
   settings: SceneSettings
+  lab: LabSettings
   scene: SceneSnapshot | null
+  preview: PreviewBatch | null
   drawing: DrawingResult | null
   /** Paper used for the current drawing (may differ from the scene's for proofs). */
   details: boolean
@@ -25,8 +30,11 @@ export interface StudioState {
 }
 
 export const initialStudioState: StudioState = {
+  mode: 'crowd',
   settings: DEFAULT_SETTINGS,
+  lab: DEFAULT_LAB,
   scene: null,
+  preview: null,
   drawing: null,
   details: true,
   job: null,
@@ -38,12 +46,14 @@ export const initialStudioState: StudioState = {
 
 export type StudioAction =
   | { type: 'updateSettings'; patch: Partial<SceneSettings> }
+  | { type: 'updateLab'; patch: Partial<LabSettings> }
+  | { type: 'setMode'; mode: StudioMode }
   | { type: 'setDetails'; details: boolean }
   | { type: 'jobStarted'; kind: JobKind; label: string }
   | { type: 'jobProgress'; fraction: number; label: string }
   | { type: 'jobFailed'; message: string }
   | { type: 'jobCancelled' }
-  | { type: 'sceneReady'; scene: SceneSnapshot }
+  | { type: 'sceneReady'; scene: SceneSnapshot; preview: PreviewBatch; fromLab?: boolean }
   | { type: 'drawingReady'; drawing: DrawingResult }
   | { type: 'setColorMode'; mode: ColorMode }
   | { type: 'select'; id: number | null }
@@ -54,6 +64,10 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
   switch (action.type) {
     case 'updateSettings':
       return { ...state, settings: { ...state.settings, ...action.patch } }
+    case 'updateLab':
+      return { ...state, lab: { ...state.lab, ...action.patch } }
+    case 'setMode':
+      return { ...state, mode: action.mode }
     case 'setDetails':
       return { ...state, details: action.details }
     case 'jobStarted':
@@ -70,7 +84,8 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
         ...state,
         job: null,
         scene: action.scene,
-        settings: action.scene.settings,
+        preview: action.preview,
+        settings: action.fromLab ? state.settings : action.scene.settings,
         drawing: null,
         selectedId: null,
         tab: 'shaded',

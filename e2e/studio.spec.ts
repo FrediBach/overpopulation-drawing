@@ -20,3 +20,21 @@ test('generate a scene, compute pen lines and see the accounting', async ({ page
 
   expect(errors).toEqual([])
 })
+
+test('pose lab shows a gallery and an in-between strip', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await page.goto('/')
+  await page.getByRole('tab', { name: 'Pose lab' }).click()
+  await page.getByRole('button', { name: 'Generate poses' }).click()
+  await expect(page.getByText('All checks pass')).toBeVisible({ timeout: 60_000 })
+  await page.screenshot({ path: 'test-results/lab-gallery.png' })
+
+  await page.getByRole('tab', { name: 'In-between' }).click()
+  await page.getByRole('button', { name: 'Generate poses' }).click()
+  await expect(page.getByText('Person #0')).toBeHidden()
+  await expect(page.getByText(/Rejected candidates/)).toBeVisible({ timeout: 60_000 })
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: 'test-results/lab-blend.png' })
+  expect(errors).toEqual([])
+})

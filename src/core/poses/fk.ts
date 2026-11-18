@@ -1,13 +1,12 @@
 import { Euler, Matrix4, Quaternion, Vector3 } from 'three'
-import { type BodyRegion, type BoneName } from '../assets/skeleton'
-import { buildVariantSkeleton, type BodyVariant } from '../assets/bodyVariants'
+import type { BodyRegion, BoneName, BoneSpec } from '../assets/skeleton'
 import { DEG } from '../math/geometry'
 import type { EulerDeg, JointRotations } from './types'
 
 /**
- * One body segment in a posed frame: an elliptical capsule, i.e. the convex
- * hull of two identical ellipsoids centred on `a` and `b`.
- * Basis vectors: `ax` (cross-section X), `ay` (segment axis), `az` (cross-section Z).
+ * One body segment proxy: an elliptical capsule, i.e. the convex hull of two
+ * identical ellipsoids centred on `a` and `b`. Used for collision, support
+ * and ground queries; the drawn surface is the skinned body mesh.
  */
 export interface Capsule {
   bone: BoneName
@@ -24,56 +23,43 @@ export interface Capsule {
   radius: number
 }
 
-export interface PosedBody {
-  /** Capsules in body frame: grounded (min y = 0) and centred on the origin in XZ. */
-  capsules: Capsule[]
-  /** Highest point above ground, in metres. */
-  height: number
-  /** Horizontal radius of the body around its centre. */
-  reach: number
-}
-
 const tmpEuler = new Euler()
-const tmpQuat = new Quaternion()
 
-function eulerQuat(rot: EulerDeg | undefined, out: Quaternion): Quaternion {
+export function eulerToQuat(rot: EulerDeg | undefined, out = new Quaternion()): Quaternion {
   if (!rot) return out.identity()
   tmpEuler.set(rot[0] * DEG, rot[1] * DEG, rot[2] * DEG, 'XYZ')
   return out.setFromEuler(tmpEuler)
 }
 
-/** Vertical half-extent of an ellipsoid with the given axes and radii. */
-function verticalSupport(c: Capsule): number {
-  return Math.sqrt((c.rx * c.ax[1]) ** 2 + (c.rcap * c.ay[1]) ** 2 + (c.rz * c.az[1]) ** 2)
+export function quatToEuler(q: Quaternion): EulerDeg {
+  tmpEuler.setFromQuaternion(q, 'XYZ')
+  return [tmpEuler.x / DEG + 0, tmpEuler.y / DEG + 0, tmpEuler.z / DEG + 0]
 }
 
-/**
- * Forward kinematics: evaluate the body variant in a pose, then ground it
- * on y = 0 and centre it. Pure and deterministic.
- */
-export function poseBody(variant: BodyVariant, root: EulerDeg, joints: JointRotations): PosedBody {
-  const skeleton = buildVariantSkeleton(variant)
-  const world = new Map<BoneName, Matrix4>()
-  const local = new Matrix4()
-  const capsules: Capsule[] = []
-  const rootMatrix = new Matrix4().makeRotationFromQuaternion(eulerQuat(root, new Quaternion()))
+/** World matrices for every bone (skeleton order), root at the origin. */
+export function forwardKinematics(skeleton: BoneSpec[], root: EulerDeg, joints: JointRotations): Matrix4[] {
+  const byName = new Map<BoneName, Matrix4>()
+  const rootMatrix = new Matrix4().makeRotationFromQuaternion(eulerToQuat(root))
+  const q = new Quaternion()
+  const one = new Vector3(1, 1, 1)
+  return skeleton.map((bone) => {
+    const parent = bone.parent ? byName.get(bone.parent)! : rootMatrix
+    const local = new Matrix4().compose(new Vector3(...bone.offset), eulerToQuat(joints[bone.name], q), one)
+    const m = new Matrix4().multiplyMatrices(parent, local)
+    byName.set(bone.name, m)
+    return m
+  })
+}
 
+/** Capsule proxies from bone matrices. */
+export function capsulesFromMatrices(skeleton: BoneSpec[], matrices: Matrix4[]): Capsule[] {
   const va = new Vector3()
   const vb = new Vector3()
   const vx = new Vector3()
   const vy = new Vector3()
   const vz = new Vector3()
-
-  for (const bone of skeleton) {
-    const parent = bone.parent ? world.get(bone.parent)! : rootMatrix
-    local.compose(
-      new Vector3(...bone.offset),
-      eulerQuat(joints[bone.name], tmpQuat),
-      new Vector3(1, 1, 1),
-    )
-    const m = new Matrix4().multiplyMatrices(parent, local)
-    world.set(bone.name, m)
-
+  return skeleton.map((bone, i) => {
+    const m = matrices[i]
     const s = bone.segment
     va.set(...s.a).applyMatrix4(m)
     vb.set(...s.b).applyMatrix4(m)
@@ -82,7 +68,7 @@ export function poseBody(variant: BodyVariant, root: EulerDeg, joints: JointRota
     vx.addScaledVector(vy, -vx.dot(vy)).normalize()
     vz.crossVectors(vx, vy).normalize()
     const rcap = s.rcap ?? Math.min(s.rx, s.rz)
-    capsules.push({
+    return {
       bone: bone.name,
       region: bone.region,
       a: va.toArray() as [number, number, number],
@@ -94,17 +80,38 @@ export function poseBody(variant: BodyVariant, root: EulerDeg, joints: JointRota
       rz: s.rz,
       rcap,
       radius: Math.max(s.rx, s.rz, rcap),
-    })
-  }
+    }
+  })
+}
 
-  // Ground: lowest surface point touches y = 0.
+/** Lowest point of a capsule (exact for the elliptical hull). */
+export function capsuleBottom(c: Capsule): number {
+  const sup = Math.sqrt((c.rx * c.ax[1]) ** 2 + (c.rcap * c.ay[1]) ** 2 + (c.rz * c.az[1]) ** 2)
+  return Math.min(c.a[1], c.b[1]) - sup
+}
+
+export interface PosedBody {
+  /** Capsules in body frame: grounded (min y = 0) and centred on the origin in XZ. */
+  capsules: Capsule[]
+  /** Bone world matrices in the same body frame (column-major, 16 per bone). */
+  matrices: Float64Array
+  height: number
+  reach: number
+}
+
+/**
+ * Forward kinematics, then ground the body on y = 0 and centre it in XZ.
+ * Pure and deterministic.
+ */
+export function poseBody(skeleton: BoneSpec[], root: EulerDeg, joints: JointRotations): PosedBody {
+  const mats = forwardKinematics(skeleton, root, joints)
+  const capsules = capsulesFromMatrices(skeleton, mats)
   let minY = Infinity
   let cx = 0
   let cz = 0
   let wsum = 0
   for (const c of capsules) {
-    const sup = verticalSupport(c)
-    minY = Math.min(minY, c.a[1] - sup, c.b[1] - sup)
+    minY = Math.min(minY, capsuleBottom(c))
     const len = Math.hypot(c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]) + c.radius
     const w = len * c.radius
     cx += ((c.a[0] + c.b[0]) / 2) * w
@@ -124,7 +131,13 @@ export function poseBody(variant: BodyVariant, root: EulerDeg, joints: JointRota
       reach = Math.max(reach, Math.hypot(p[0], p[2]) + c.radius)
     }
   }
-  return { capsules, height, reach }
+  const shift = new Matrix4().makeTranslation(-cx, -minY, -cz)
+  const matrices = new Float64Array(mats.length * 16)
+  mats.forEach((m, i) => {
+    const g = new Matrix4().multiplyMatrices(shift, m)
+    matrices.set(g.elements, i * 16)
+  })
+  return { capsules, matrices, height, reach }
 }
 
 /** Placement of a posed body on the beach: rotate about Y, then translate in XZ. */
@@ -154,3 +167,15 @@ export function placeCapsules(body: PosedBody, pl: Placement): Capsule[] {
   }))
 }
 
+/** Bone matrices in world space for skinning. */
+export function placeMatrices(body: PosedBody, pl: Placement): Float64Array {
+  const placement = new Matrix4().makeRotationY(pl.yaw).setPosition(pl.x, 0, pl.z)
+  const out = new Float64Array(body.matrices.length)
+  const m = new Matrix4()
+  for (let i = 0; i < body.matrices.length; i += 16) {
+    m.fromArray(body.matrices, i)
+    m.premultiply(placement)
+    out.set(m.elements, i)
+  }
+  return out
+}
